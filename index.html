@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>양봉장 관리</title>
+<style>
+body{font-family:sans-serif;margin:0;background:#fffbe8;font-size:17px}
+header{background:#f5b700;padding:14px;font-weight:bold;font-size:20px}
+#warn{display:none;background:#d64545;color:#fff;padding:10px;font-size:15px}
+nav{display:flex}nav button{flex:1;padding:14px 0;border:0;background:#ffe27a;font-size:16px}
+nav button.on{background:#fff;font-weight:bold}
+section{display:none;padding:12px}section.on{display:block}
+.row{margin-bottom:16px}.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{width:48px;height:48px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:18px}
+.g{background:#3a9d3a}.y{background:#e0a800}.r{background:#d64545}.n{background:#aaa}
+input,select,textarea,button{font-size:17px;padding:12px;margin:4px 0;width:100%;box-sizing:border-box}
+.mic{background:#d64545;color:#fff;border:0;border-radius:10px;padding:18px;font-size:20px}
+.save{background:#3a9d3a;color:#fff;border:0;border-radius:10px;padding:16px;font-size:20px}
+#preview{background:#e8f5e8;border-radius:8px;padding:10px;margin:6px 0;font-weight:bold}
+.log{background:#fff;border-radius:8px;padding:10px;margin:6px 0;font-size:15px}
+.log button{width:auto;float:right;padding:4px 10px;font-size:14px}
+.small{font-size:14px;color:#666}
+</style></head><body>
+<header>🐝 양봉장 관리</header>
+<div id="warn">⚠ 이 방식으로 열면 기록이 저장되지 않습니다. 인터넷 주소(https)로 열어야 합니다.</div>
+<nav>
+<button data-t="home" class="on">현황</button><button data-t="input">입력</button>
+<button data-t="logs">기록</button><button data-t="set">설정</button>
+</nav>
+
+<section id="home" class="on"></section>
+
+<section id="input">
+<button class="mic" id="mic">🎤 말로 입력</button>
+<textarea id="voice" rows="2" placeholder="여기에 말하거나 쓰세요 (키보드 마이크도 OK)&#10;예) A열 3번 설탕물 급여"></textarea>
+<div id="preview">→ 말하면 여기에 분석 결과가 나옵니다</div>
+<hr>
+<input type="date" id="date">
+<select id="scope" onchange="scopeUI()">
+<option value="all">전체</option><option value="row">열별</option><option value="colony">봉군별</option>
+</select>
+<select id="row"></select>
+<input id="nos" placeholder="봉군번호 (예: 3 또는 1,3,5-8)">
+<select id="type"></select>
+<textarea id="memo" rows="2" placeholder="메모 (예: 설탕물 1:1 1L)"></textarea>
+<button class="save" onclick="addLog()">저장</button>
+</section>
+
+<section id="logs">
+<select id="frow" onchange="renderLogs()"></select>
+<div id="loglist"></div>
+</section>
+
+<section id="set">
+<div id="rowset"></div>
+<button onclick="addRow()">+ 열 추가</button>
+<button class="save" onclick="saveRows()">설정 저장</button>
+<hr>
+<button onclick="exportData()">백업(내보내기)</button>
+<input type="file" id="imp" accept=".json" onchange="importData(event)">
+</section>
+
+<script>
+const $=s=>document.querySelector(s);
+const DEF={rows:[{name:'A',count:10},{name:'B',count:8}],logs:[]};
+function load(){
+  try{localStorage.setItem('_t','1');return JSON.parse(localStorage.bee||'null')}
+  catch(e){$('#warn').style.display='block';return null}
+}
+let S=load()||DEF;
+function save(){
+  try{localStorage.bee=JSON.stringify(S)}
+  catch(e){$('#warn').style.display='block'}
+}
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+const TYPES=['검진','급여','응애처치','분봉','여왕벌','합봉','채밀','메모'];
+
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button,section').forEach(e=>e.classList.remove('on'));
+  b.classList.add('on');$('#'+b.dataset.t).classList.add('on');renderAll();
+});
+
+function parseNos(s){
+  const out=[];
+  s.split(/[,\s]+/).filter(Boolean).forEach(p=>{
+    const m=p.match(/^(\d+)[-~](\d+)$/);
+    if(m){for(let i=+m[1];i<=+m[2];i++)out.push(i)}
+    else if(/^\d+$/.test(p))out.push(+p);
+  });
+  return [...new Set(out)];
+}
+function applies(l,r,n){
+  return l.scope==='all'||(l.scope==='row'&&l.row===r)||
+         (l.scope==='colony'&&l.row===r&&l.nos.includes(n));
+}
+function renderHome(){
+  const now=Date.now();
+  $('#home').innerHTML=S.rows.map(r=>{
+    let chips='';
+    for(let n=1;n<=r.count;n++){
+      const ts=S.logs.filter(l=>applies(l,r.name,n)).map(l=>l.ts).sort((a,b)=>a-b);
+      const last=ts.pop();
+      let c='n';
+      if(last){const d=(now-last)/864e5;c=d<=7?'g':d<=14?'y':'r'}
+      chips+=`<div class="chip ${c}" onclick="pick('${r.name}',${n})">${n}</div>`;
+    }
+    return `<div class="row"><b>${r.name}열 (${r.count}군)</b><div class="chips">${chips}</div></div>`;
+  }).join('')+'<div class="small">🟩 7일 이내 · 🟨 14일 이내 · 🟥 그 이상 · ⬜ 기록 없음<br>봉군을 누르면 해당 봉군 입력 화면으로 이동합니다.</div>';
+}
+function pick(r,n){
+  go('input');$('#scope').value='colony';$('#row').value=r;$('#nos').value=n;scopeUI();
+}
+function go(t){document.querySelector(`nav button[data-t=${t}]`).click()}
+
+function fillSelects(){
+  const opts=S.rows.map(r=>`<option>${r.name}</option>`).join('');
+  const cur=$('#row').value,curf=$('#frow').value;
+  $('#row').innerHTML=opts;
+  $('#frow').innerHTML='<option value="">전체 기록</option>'+opts;
+  if(cur)$('#row').value=cur;if(curf)$('#frow').value=curf;
+  if(!$('#type').innerHTML)$('#type').innerHTML=TYPES.map(t=>`<option>${t}</option>`).join('');
+  if(!$('#date').value)$('#date').value=new Date().toISOString().slice(0,10);
+  scopeUI();
+}
+function scopeUI(){
+  const s=$('#scope').value;
+  $('#row').style.display=s==='all'?'none':'block';
+  $('#nos').style.display=s==='colony'?'block':'none';
+}
+function addLog(){
+  const scope=$('#scope').value,row=$('#row').value;
+  const nos=scope==='colony'?parseNos($('#nos').value):[];
+  if(scope==='colony'&&!nos.length)return alert('봉군 번호를 입력하세요');
+  S.logs.push({id:Date.now()+Math.random(),ts:new Date($('#date').value).getTime(),
+    scope,row,nos,type:$('#type').value,memo:$('#memo').value});
+  save();$('#memo').value='';$('#voice').value='';
+  $('#preview').textContent='→ 저장되었습니다 ✔';
+  renderAll();
+}
+function label(l){
+  return l.scope==='all'?'전체':l.scope==='row'?l.row+'열 전체':`${l.row}열 ${l.nos.join(',')}번`;
+}
+function renderLogs(){
+  const f=$('#frow').value;
+  $('#loglist').innerHTML=S.logs.filter(l=>!f||l.scope==='all'||l.row===f)
+    .sort((a,b)=>b.ts-a.ts).map(l=>
+    `<div class="log"><button onclick="del('${l.id}')">삭제</button>
+    <b>${new Date(l.ts).toLocaleDateString('ko')}</b> · ${label(l)} · ${l.type}<br>${l.memo||''}</div>`).join('')||'기록 없음';
+}
+function del(id){if(confirm('삭제할까요?')){S.logs=S.logs.filter(l=>l.id!=id);save();renderAll()}}
+
+function renderSet(){
+  $('#rowset').innerHTML=S.rows.map((r,i)=>
+    `<div style="display:flex;gap:6px"><input value="${r.name}" data-i="${i}" class="rn">
+     <input type="number" value="${r.count}" data-i="${i}" class="rc"><button style="width:70px" onclick="delRow(${i})">X</button></div>`).join('')
+    +'<div class="small">왼쪽: 열 이름, 오른쪽: 봉군수</div>';
+}
+function addRow(){
+  saveRows(true);
+  S.rows.push({name:String.fromCharCode(65+S.rows.length),count:10});save();renderAll();
+}
+function delRow(i){if(confirm('이 열을 삭제할까요? (기록은 남습니다)')){S.rows.splice(i,1);save();renderAll()}}
+function saveRows(silent){
+  document.querySelectorAll('.rn').forEach(e=>S.rows[e.dataset.i].name=e.value.trim().toUpperCase());
+  document.querySelectorAll('.rc').forEach(e=>S.rows[e.dataset.i].count=+e.value||0);
+  save();if(silent!==true){renderAll();alert('저장됨')}
+}
+function exportData(){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));
+  a.download='bee-backup.json';a.click();
+}
+function importData(e){
+  const r=new FileReader();r.onload=()=>{S=JSON.parse(r.result);save();renderAll()};
+  r.readAsText(e.target.files[0]);
+}
+
+// ---- 음성/문장 분석 ----
+const KO_NUM={일:1,이:2,삼:3,사:4,오:5,육:6,칠:7,팔:8,구:9};
+function koToNum(s){
+  if(/^\d+$/.test(s))return +s;
+  let n=0,cur=0;
+  for(const ch of s){if(ch==='십'){n+=(cur||1)*10;cur=0}else cur=KO_NUM[ch]||0}
+  return n+cur;
+}
+const LETTER={에이:'A',비:'B',씨:'C',시:'C',디:'D',이:'E',에프:'F',지:'G',에이치:'H'};
+
+function applyVoice(){
+  const t=$('#voice').value.trim();if(!t)return;
+  const rm=t.match(/(에이치|에이|에프|비|씨|시|디|이|지|[A-Za-z])\s*열/i);
+  const row=rm?(LETTER[rm[1]]||rm[1].toUpperCase()):null;
+  let nos=[];
+  const range=t.match(/(\d+|[일이삼사오육칠팔구십]+)\s*번?\s*(?:부터|에서|~)\s*(\d+|[일이삼사오육칠팔구십]+)\s*번/);
+  if(range){for(let i=koToNum(range[1]);i<=koToNum(range[2]);i++)nos.push(i)}
+  else{[...t.matchAll(/(\d+|[일이삼사오육칠팔구십]+)\s*번/g)].forEach(m=>nos.push(koToNum(m[1])))}
+  let scope='all';
+  if(row&&nos.length)scope='colony';
+  else if(row)scope='row';
+  else if(nos.length){$('#preview').textContent='→ 몇 열인지 같이 말해주세요 (예: A열 3번)';return}
+  if(row&&!S.rows.some(r=>r.name===row)){$('#preview').textContent='→ '+row+'열이 설정에 없습니다';return}
+  $('#scope').value=scope;if(row)$('#row').value=row;
+  $('#nos').value=nos.join(',');
+  let type='메모';
+  if(/검진|점검|확인/.test(t))type='검진';
+  else if(/급여|설탕|먹이|당액|화분떡/.test(t))type='급여';
+  else if(/응애|약|처치|옥살산/.test(t))type='응애처치';
+  else if(/분봉/.test(t))type='분봉';
+  else if(/여왕|왕/.test(t))type='여왕벌';
+  else if(/합봉/.test(t))type='합봉';
+  else if(/채밀|꿀/.test(t))type='채밀';
+  $('#type').value=type;
+  $('#memo').value=t;
+  scopeUI();
+  const who=scope==='all'?'전체':scope==='row'?row+'열 전체':row+'열 '+nos.join(',')+'번';
+  $('#preview').textContent='→ '+who+' / '+type+'  (맞으면 아래 저장)';
+}
+let tm;$('#voice').addEventListener('input',()=>{clearTimeout(tm);tm=setTimeout(applyVoice,800)});
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(SR){
+  const rec=new SR();rec.lang='ko-KR';rec.interimResults=false;
+  rec.onresult=e=>{$('#voice').value=e.results[0][0].transcript;applyVoice()};
+  rec.onerror=e=>alert('🎤 버튼이 안 됩니다. 입력칸을 누르고 키보드의 마이크로 말해보세요.');
+  $('#mic').onclick=()=>{try{rec.start()}catch(e){}};
+}else{
+  $('#mic').onclick=()=>alert('입력칸을 누르고 키보드의 마이크로 말해보세요.');
+}
+
+function renderAll(){fillSelects();renderHome();renderLogs();renderSet()}
+renderAll();
+</script></body></html>
